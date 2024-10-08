@@ -6,7 +6,7 @@ authors = ["Eduard Poliakov <ya.polykov@gmail.com>"]
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "3.10.12"
+python = "^3.10"
 fastapi = "^0.115.0"
 llama-index = "^0.11.16"
 openai = "^1.51.0"

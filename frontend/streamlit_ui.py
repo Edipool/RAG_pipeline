@@ -7,7 +7,7 @@ import streamlit as st
 import requests
 
 # URL API для взаимодействия с сервером
-API_URL = "http://localhost:8000"
+API_URL = "http://backend:8000"
 
 # Заголовок приложения
 st.title("Retrieval-Augmented Generation System")

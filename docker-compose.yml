@@ -1,0 +1,33 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: backend  # Таргет для сборки бэкенда
+    container_name: backend
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY:?API key is required}
+    networks:
+      - app-network
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: frontend  # Таргет для сборки фронтенда
+    container_name: frontend
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://backend:8000  # URL для взаимодействия с бэкендом
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge
+
