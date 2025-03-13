@@ -5,8 +5,8 @@
 """
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from backend.contracts import SearchQuery
-from backend.utils import process_upload, search_index
+from backend.contracts import SearchQuery, GenerateQuery
+from backend.utils import process_upload, search_index, generate_answer
 import os
 from dotenv import load_dotenv
 
@@ -63,6 +63,32 @@ async def search(query: SearchQuery):
     # Выполнение поиска
     result = search_index(index, query.query)
     return {"response": result}
+
+
+@app.post("/generate/")
+async def generate(query: GenerateQuery):
+    """
+    Генерирует ответ на основе результатов поиска по индексу.
+
+    Аргументы:
+        query (GenerateQuery): Объект, содержащий строку запроса и параметры генерации.
+
+    Возвращает:
+        dict: Сгенерированный ответ и источники информации.
+
+    Исключения:
+        HTTPException: Если индекс не создан.
+    """
+    global index
+    if index is None:
+        raise HTTPException(
+            status_code=400,
+            detail="Index is not created yet. Please upload documents first.",
+        )
+
+    # Выполнение генерации ответа
+    result = generate_answer(index, query.query, query.max_tokens)
+    return result
 
 
 if __name__ == "__main__":

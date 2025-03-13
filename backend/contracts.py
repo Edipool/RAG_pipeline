@@ -12,3 +12,14 @@ class SearchQuery(BaseModel):
         query (str): Строка, содержащая текст поискового запроса.
     """
     query: str
+
+class GenerateQuery(BaseModel):
+    """
+    Модель для представления запроса на генерацию ответа.
+
+    Атрибуты:
+        query (str): Строка, содержащая текст запроса.
+        max_tokens (int): Максимальное количество токенов для генерации ответа.
+    """
+    query: str
+    max_tokens: int = 1000

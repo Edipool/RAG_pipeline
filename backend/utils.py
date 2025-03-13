@@ -9,6 +9,9 @@ from fastapi import UploadFile, HTTPException
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, StorageContext
 from llama_index.vector_stores.faiss import FaissVectorStore
 import faiss
+from llama_index.llms.openai import OpenAI
+from llama_index.core import Settings
+from llama_index.core.response_synthesizers import get_response_synthesizer
 
 # Директория для сохранения загруженных документов
 UPLOAD_DIR = "data"
@@ -91,3 +94,58 @@ def search_index(index, query: str):
         return response.response
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error during search: {str(e)}")
+
+
+def generate_answer(index, query: str, max_tokens: int = 1000):
+    """
+    Генерирует ответ на основе контекста, полученного из поиска по индексу.
+
+    Аргументы:
+        index (VectorStoreIndex): Индекс для выполнения поиска.
+        query (str): Строка поискового запроса.
+        max_tokens (int): Максимальное количество токенов для генерации ответа.
+
+    Возвращает:
+        dict: Словарь, содержащий сгенерированный ответ и найденные источники.
+
+    Исключения:
+        HTTPException: Если возникает ошибка при выполнении поиска или генерации.
+    """
+    try:
+        # Настраиваем LLM
+        llm = OpenAI(model="gpt-4o-mini", max_tokens=max_tokens)
+        Settings.llm = llm
+
+        # Создаем поисковый движок, который будет искать по индексу
+        retriever = index.as_retriever(similarity_top_k=3)
+
+        # Получаем релевантные куски текста
+        retrieved_nodes = retriever.retrieve(query)
+
+        # Формируем сообщение с контекстом
+        context_text = "\n\n".join([node.get_content() for node in retrieved_nodes])
+
+        # Создаем синтезатор ответов
+        response_synthesizer = get_response_synthesizer(
+            response_mode="refine",
+            llm=llm
+        )
+
+        # Генерируем ответ на основе найденных источников
+        response = response_synthesizer.synthesize(
+            query=query,
+            nodes=retrieved_nodes
+        )
+
+        # Возвращаем ответ и источники
+        sources = [{"text": node.get_content(), "score": node.get_score()} for node in retrieved_nodes]
+
+        return {
+            "answer": response.response,
+            "sources": sources
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error during answer generation: {str(e)}"
+        )
