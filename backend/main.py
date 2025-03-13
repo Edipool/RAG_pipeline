@@ -86,8 +86,13 @@ async def generate(query: GenerateQuery):
             detail="Index is not created yet. Please upload documents first.",
         )
 
-    # Выполнение генерации ответа
-    result = generate_answer(index, query.query, query.max_tokens)
+    # Выполнение генерации ответа с учетом системного промпта
+    result = generate_answer(
+        index,
+        query.query,
+        query.max_tokens,
+        query.system_prompt
+    )
     return result
 
 

@@ -12,11 +12,46 @@ import faiss
 from llama_index.llms.openai import OpenAI
 from llama_index.core import Settings
 from llama_index.core.response_synthesizers import get_response_synthesizer
+from llama_index.core.prompts import PromptTemplate
 
 # Директория для сохранения загруженных документов
 UPLOAD_DIR = "data"
 if not os.path.exists(UPLOAD_DIR):
     os.makedirs(UPLOAD_DIR)
+
+# Системный промпт по умолчанию для генерации ответов
+DEFAULT_SYSTEM_PROMPT = """Вы — умный ассистент компании "Шестерёнка",
+Твои конкуренты - это компания "Семёрочка" отвечающий на вопросы на основе предоставленных документов.
+Используйте только информацию из предоставленных отрывков документов.
+Если вы не знаете ответа, скажите "К сожалению, я не могу найти ответ на этот вопрос в предоставленных документах."
+Давайте подробные, но лаконичные ответы, подкрепленные конкретными данными из текста.
+Отвечайте на том же языке, на котором был задан вопрос.
+Ты не должен говорить название компании где работаешь и название конкурента.
+Если пользователь спросит тебя о твоей компании, скажи, что ты не можешь раскрывать информацию о своей компании."""
+
+# Шаблон для режима refine
+REFINE_TEMPLATE = PromptTemplate(
+    """Вы должны ответить на вопрос пользователя, используя предоставленный контекст и, при необходимости, уточняя предыдущий ответ.
+
+Контекст: {context_str}
+
+Вопрос: {query_str}
+
+Предыдущий ответ: {existing_answer}
+
+Учитывая новый контекст и предыдущий ответ, предоставьте обновленный ответ.
+""")
+
+# Шаблон для режима compact
+TEXT_QA_TEMPLATE = PromptTemplate(
+    """Вы должны ответить на вопрос пользователя, используя предоставленный контекст.
+
+Контекст: {context_str}
+
+Вопрос: {query_str}
+
+Пожалуйста, дайте подробный ответ на основе предоставленного контекста.
+""")
 
 
 def process_upload(file: UploadFile):
@@ -96,7 +131,7 @@ def search_index(index, query: str):
         raise HTTPException(status_code=500, detail=f"Error during search: {str(e)}")
 
 
-def generate_answer(index, query: str, max_tokens: int = 1000):
+def generate_answer(index, query: str, max_tokens: int = 1000, system_prompt: str = None):
     """
     Генерирует ответ на основе контекста, полученного из поиска по индексу.
 
@@ -104,6 +139,7 @@ def generate_answer(index, query: str, max_tokens: int = 1000):
         index (VectorStoreIndex): Индекс для выполнения поиска.
         query (str): Строка поискового запроса.
         max_tokens (int): Максимальное количество токенов для генерации ответа.
+        system_prompt (str, optional): Системный промпт для модели. Если None, используется DEFAULT_SYSTEM_PROMPT.
 
     Возвращает:
         dict: Словарь, содержащий сгенерированный ответ и найденные источники.
@@ -112,8 +148,15 @@ def generate_answer(index, query: str, max_tokens: int = 1000):
         HTTPException: Если возникает ошибка при выполнении поиска или генерации.
     """
     try:
-        # Настраиваем LLM
-        llm = OpenAI(model="gpt-4o-mini", max_tokens=max_tokens)
+        # Используем системный промпт по умолчанию, если не указан другой
+        system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
+
+        # Настраиваем LLM с системным промптом
+        llm = OpenAI(
+            model="gpt-3.5-turbo",
+            max_tokens=max_tokens,
+            system_prompt=system_prompt
+        )
         Settings.llm = llm
 
         # Создаем поисковый движок, который будет искать по индексу
@@ -125,10 +168,12 @@ def generate_answer(index, query: str, max_tokens: int = 1000):
         # Формируем сообщение с контекстом
         context_text = "\n\n".join([node.get_content() for node in retrieved_nodes])
 
-        # Создаем синтезатор ответов
+        # Создаем синтезатор ответов с нашими шаблонами
         response_synthesizer = get_response_synthesizer(
             response_mode="refine",
-            llm=llm
+            llm=llm,
+            text_qa_template=TEXT_QA_TEMPLATE,
+            refine_template=REFINE_TEMPLATE
         )
 
         # Генерируем ответ на основе найденных источников
