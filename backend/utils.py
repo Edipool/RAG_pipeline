@@ -161,7 +161,7 @@ def generate_answer(index, query: str, max_tokens: int = 1000, system_prompt: st
 
         # Настраиваем LLM с системным промптом
         llm = OpenAI(
-            model="gpt-3.5-turbo",
+            model="gpt-4o-mini",
             max_tokens=max_tokens,
             system_prompt=system_prompt
         )
