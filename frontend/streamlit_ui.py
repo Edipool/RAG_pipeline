@@ -4,6 +4,7 @@
 """
 import streamlit as st
 import requests
+import time
 
 # URL API для взаимодействия с сервером
 API_URL = "http://backend:8000"
@@ -11,6 +12,20 @@ API_URL = "http://backend:8000"
 # Инициализация состояния сессии
 if 'document_uploaded' not in st.session_state:
     st.session_state.document_uploaded = False
+
+if 'chat_id' not in st.session_state:
+    # При первой загрузке создаем новый чат
+    try:
+        response = requests.post(f"{API_URL}/create_chat/")
+        if response.status_code == 200:
+            st.session_state.chat_id = response.json()["chat_id"]
+        else:
+            st.session_state.chat_id = None
+    except Exception:
+        st.session_state.chat_id = None
+
+if 'chat_history' not in st.session_state:
+    st.session_state.chat_history = []
 
 # Заголовок приложения
 st.title("Retrieval-Augmented Generation System")
@@ -28,6 +43,22 @@ with st.sidebar:
     st.header("Режимы работы")
     st.write("**Поиск**: поиск по индексированным документам")
     st.write("**Генерация**: поиск с генерацией ответа на основе найденных документов")
+
+    # Добавляем кнопку для создания нового чата
+    if st.button("Начать новый чат"):
+        try:
+            response = requests.post(f"{API_URL}/create_chat/")
+            if response.status_code == 200:
+                st.session_state.chat_id = response.json()["chat_id"]
+                st.session_state.chat_history = []
+                st.success("Создан новый чат!")
+                time.sleep(1)
+                st.rerun()
+        except Exception as e:
+            st.error(f"Ошибка при создании нового чата: {str(e)}")
+
+    if st.session_state.chat_id:
+        st.info(f"Текущий ID чата: {st.session_state.chat_id[:8]}...")
 
 # Секция загрузки файла
 with st.expander("Document Upload", expanded=not st.session_state.document_uploaded):
@@ -59,41 +90,80 @@ else:
 # Если документ загружен, показываем интерфейс для запросов
 if st.session_state.document_uploaded:
     # Выбор режима работы
-    mode = st.radio("Select mode:", ["Search", "Generate"])
+    mode = st.radio("Select mode:", ["Chat", "Search"])
+
+    # Отображение истории чата
+    if mode == "Chat" and st.session_state.chat_history:
+        st.subheader("Chat History")
+        chat_container = st.container()
+
+        with chat_container:
+            for message in st.session_state.chat_history:
+                if message["role"] == "user":
+                    st.markdown(f"**You**: {message['content']}")
+                else:
+                    st.markdown(f"**Assistant**: {message['content']}")
+                st.divider()
 
     # Ввод поискового запроса пользователем
     query = st.text_input("Enter your query")
 
-    # Если выбран режим генерации, показать дополнительные настройки
-    if mode == "Generate":
+    # Если выбран режим чата
+    if mode == "Chat":
         with st.expander("Advanced settings", expanded=False):
             max_tokens = st.slider("Max tokens for response", 100, 2000, 1000)
+            use_memory = st.checkbox("Use chat memory", value=True)
 
-        # Кнопка для запуска генерации
-        if st.button("Generate"):
+        # Кнопка для отправки запроса
+        if st.button("Send"):
             if query:
+                # Добавляем запрос пользователя в историю чата
+                st.session_state.chat_history.append({"role": "user", "content": query})
+
                 # Показать индикатор генерации
                 with st.spinner("Generating response..."):
-                    # Отправка POST-запроса для генерации ответа
-                    response = requests.post(
-                        f"{API_URL}/generate/",
-                        json={"query": query, "max_tokens": max_tokens}
-                    )
-                    # Проверка статуса ответа
-                    if response.status_code == 200:
-                        result = response.json()
-                        # Отображение сгенерированного ответа
-                        st.subheader("Generated Answer")
-                        st.write(result["answer"])
+                    # Подготовка данных для запроса
+                    request_data = {
+                        "query": query,
+                        "max_tokens": max_tokens
+                    }
 
-                        # Отображение источников информации
-                        with st.expander("Sources", expanded=False):
-                            for i, source in enumerate(result["sources"]):
-                                st.markdown(f"**Source {i+1}** (score: {source['score']:.2f})")
-                                st.text(source["text"])
-                                st.divider()
-                    else:
-                        st.error(f"Generation failed: {response.json().get('detail')}")
+                    # Добавляем chat_id, если включена память чата
+                    if use_memory and st.session_state.chat_id:
+                        request_data["chat_id"] = st.session_state.chat_id
+
+                    # Отправка POST-запроса для генерации ответа
+                    try:
+                        response = requests.post(
+                            f"{API_URL}/generate/",
+                            json=request_data
+                        )
+
+                        # Проверка статуса ответа
+                        if response.status_code == 200:
+                            result = response.json()
+                            answer = result["answer"]
+
+                            # Добавляем ответ в историю чата
+                            st.session_state.chat_history.append({"role": "assistant", "content": answer})
+
+                            # Сохраняем источники в сессии
+                            st.session_state.last_sources = result["sources"]
+
+                            # Перезагружаем страницу для обновления интерфейса
+                            st.rerun()
+                        else:
+                            st.error(f"Generation failed: {response.json().get('detail')}")
+                    except Exception as e:
+                        st.error(f"Error during generation: {str(e)}")
+
+        # Показываем источники последнего ответа, если они есть
+        if 'last_sources' in st.session_state and st.session_state.last_sources:
+            with st.expander("Last Answer Sources", expanded=False):
+                for i, source in enumerate(st.session_state.last_sources):
+                    st.markdown(f"**Source {i+1}** (score: {source['score']:.2f})")
+                    st.text(source["text"])
+                    st.divider()
 
     # Если выбран режим поиска
     elif mode == "Search":

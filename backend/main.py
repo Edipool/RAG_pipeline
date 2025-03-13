@@ -6,9 +6,10 @@
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from backend.contracts import SearchQuery, GenerateQuery
-from backend.utils import process_upload, search_index, generate_answer
+from backend.utils import process_upload, search_index, generate_answer, get_or_create_chat_id
 import os
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 # Загружаем переменные из .env файла
 load_dotenv()
@@ -21,6 +22,20 @@ app = FastAPI()
 # Переменная для хранения индекса (на время тестов хранить локально индексы не будем).
 index = None
 
+class CreateChatResponse(BaseModel):
+    """Ответ на запрос создания нового чата"""
+    chat_id: str
+
+@app.post("/create_chat/")
+async def create_chat() -> CreateChatResponse:
+    """
+    Создает новый чат и возвращает его идентификатор.
+
+    Возвращает:
+        CreateChatResponse: Объект с идентификатором чата.
+    """
+    chat_id = get_or_create_chat_id()
+    return CreateChatResponse(chat_id=chat_id)
 
 @app.post("/upload/")
 async def upload_document(file: UploadFile = File(...)):
@@ -68,7 +83,8 @@ async def search(query: SearchQuery):
 @app.post("/generate/")
 async def generate(query: GenerateQuery):
     """
-    Генерирует ответ на основе результатов поиска по индексу.
+    Генерирует ответ на основе результатов поиска по индексу,
+    с учетом истории диалога, если указан chat_id.
 
     Аргументы:
         query (GenerateQuery): Объект, содержащий строку запроса и параметры генерации.
@@ -86,12 +102,13 @@ async def generate(query: GenerateQuery):
             detail="Index is not created yet. Please upload documents first.",
         )
 
-    # Выполнение генерации ответа с учетом системного промпта
+    # Выполнение генерации ответа с учетом системного промпта и chat_id
     result = generate_answer(
         index,
         query.query,
         query.max_tokens,
-        query.system_prompt
+        query.system_prompt,
+        query.chat_id
     )
     return result
 

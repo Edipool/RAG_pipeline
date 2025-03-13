@@ -5,6 +5,7 @@
 
 import os
 import shutil
+import uuid
 from fastapi import UploadFile, HTTPException
 from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, StorageContext
 from llama_index.vector_stores.faiss import FaissVectorStore
@@ -13,6 +14,8 @@ from llama_index.llms.openai import OpenAI
 from llama_index.core import Settings
 from llama_index.core.response_synthesizers import get_response_synthesizer
 from llama_index.core.prompts import PromptTemplate
+from llama_index.core.memory import ChatMemoryBuffer
+from typing import Dict, Optional
 
 # Директория для сохранения загруженных документов
 UPLOAD_DIR = "data"
@@ -53,6 +56,8 @@ TEXT_QA_TEMPLATE = PromptTemplate(
 Пожалуйста, дайте подробный ответ на основе предоставленного контекста.
 """)
 
+# Словарь для хранения экземпляров памяти для каждого чата
+chat_memories: Dict[str, ChatMemoryBuffer] = {}
 
 def process_upload(file: UploadFile):
     """
@@ -131,15 +136,18 @@ def search_index(index, query: str):
         raise HTTPException(status_code=500, detail=f"Error during search: {str(e)}")
 
 
-def generate_answer(index, query: str, max_tokens: int = 1000, system_prompt: str = None):
+def generate_answer(index, query: str, max_tokens: int = 1000, system_prompt: str = None,
+                   chat_id: str = None):
     """
-    Генерирует ответ на основе контекста, полученного из поиска по индексу.
+    Генерирует ответ на основе контекста, полученного из поиска по индексу,
+    с учетом истории диалога, если указан chat_id.
 
     Аргументы:
         index (VectorStoreIndex): Индекс для выполнения поиска.
         query (str): Строка поискового запроса.
         max_tokens (int): Максимальное количество токенов для генерации ответа.
         system_prompt (str, optional): Системный промпт для модели. Если None, используется DEFAULT_SYSTEM_PROMPT.
+        chat_id (str, optional): Идентификатор чата для сохранения истории разговора.
 
     Возвращает:
         dict: Словарь, содержащий сгенерированный ответ и найденные источники.
@@ -159,38 +167,79 @@ def generate_answer(index, query: str, max_tokens: int = 1000, system_prompt: st
         )
         Settings.llm = llm
 
-        # Создаем поисковый движок, который будет искать по индексу
-        retriever = index.as_retriever(similarity_top_k=3)
+        # Работаем с историей чата, если указан chat_id
+        if chat_id:
+            # Создаем новую память чата, если она не существует для данного ID
+            if chat_id not in chat_memories:
+                chat_memories[chat_id] = ChatMemoryBuffer.from_defaults(
+                    token_limit=4000,  # Лимит токенов для истории чата
+                )
 
-        # Получаем релевантные куски текста
-        retrieved_nodes = retriever.retrieve(query)
+            # Получаем память для текущего чата
+            memory = chat_memories[chat_id]
 
-        # Формируем сообщение с контекстом
-        context_text = "\n\n".join([node.get_content() for node in retrieved_nodes])
+            # Создаем поисковый движок с использованием памяти чата
+            chat_engine = index.as_chat_engine(
+                chat_mode="condense_plus_context",
+                memory=memory,
+                system_prompt=system_prompt,
+                llm=llm,
+                similarity_top_k=3,  # Количество найденных фрагментов для использования в ответе
+            )
 
-        # Создаем синтезатор ответов с нашими шаблонами
-        response_synthesizer = get_response_synthesizer(
-            response_mode="refine",
-            llm=llm,
-            text_qa_template=TEXT_QA_TEMPLATE,
-            refine_template=REFINE_TEMPLATE
-        )
+            # Получаем ответ от чат-движка
+            response = chat_engine.chat(query)
 
-        # Генерируем ответ на основе найденных источников
-        response = response_synthesizer.synthesize(
-            query=query,
-            nodes=retrieved_nodes
-        )
+            # Получаем использованные источники (в chat_engine нет прямого доступа к источникам через response)
+            # Поэтому делаем отдельный запрос через retriever для получения источников
+            retriever = index.as_retriever(similarity_top_k=3)
+            retrieved_nodes = retriever.retrieve(query)
+            sources = [{"text": node.get_content(), "score": node.get_score()} for node in retrieved_nodes]
 
-        # Возвращаем ответ и источники
-        sources = [{"text": node.get_content(), "score": node.get_score()} for node in retrieved_nodes]
+            return {
+                "answer": response.response,
+                "sources": sources
+            }
 
-        return {
-            "answer": response.response,
-            "sources": sources
-        }
+        else:
+            # Без истории чата - используем стандартный подход
+            retriever = index.as_retriever(similarity_top_k=3)
+            retrieved_nodes = retriever.retrieve(query)
+
+            # Создаем синтезатор ответов с нашими шаблонами
+            response_synthesizer = get_response_synthesizer(
+                response_mode="refine",
+                llm=llm,
+                text_qa_template=TEXT_QA_TEMPLATE,
+                refine_template=REFINE_TEMPLATE
+            )
+
+            # Генерируем ответ на основе найденных источников
+            response = response_synthesizer.synthesize(
+                query=query,
+                nodes=retrieved_nodes
+            )
+
+            # Возвращаем ответ и источники
+            sources = [{"text": node.get_content(), "score": node.get_score()} for node in retrieved_nodes]
+
+            return {
+                "answer": response.response,
+                "sources": sources
+            }
+
     except Exception as e:
         raise HTTPException(
             status_code=500,
             detail=f"Error during answer generation: {str(e)}"
         )
+
+
+def get_or_create_chat_id() -> str:
+    """
+    Создает новый идентификатор чата.
+
+    Возвращает:
+        str: Уникальный идентификатор чата.
+    """
+    return str(uuid.uuid4())
